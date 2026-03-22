@@ -6,6 +6,9 @@ Created on Sun Mar 22 13:32:04 2026
  -----------
  This module implements a terminal-based seat booking system
  for the Apache Airlines Burak757 passenger jet fleet.
+ The "Show Booking Status" option opens a themed Tkinter (TTK)
+ graphical window for a clear, color-coded seat map view.
+ 
  
  The Burak757 cabin layout:
    - Rows    : A, B, C, D, E, F  (6 rows)
@@ -23,6 +26,9 @@ Created on Sun Mar 22 13:32:04 2026
 @author: chipp
 """
 
+import tkinter as tk
+import tkinter.ttk as ttk
+
 # Constants
 
 # The six cabin rows of the Burak757 (A = first, F = sixth/last).
@@ -31,18 +37,39 @@ ROWS = ['A', 'B', 'C', 'D', 'E', 'F']
 # Total number of seat columns (1-indexed: 1 through 80).
 NUM_COLUMNS = 80
 
-# Row D (the 4th row, index 3) spans the full-width aisle of the aircraft.
-AISLE_ROW = 'D'
+# Sentinel used only in the display layer to insert the aisle visual row.
+# It is never a key inside seat_map.
+_AISLE_SENTINEL = '_AISLE_'
+
 
 # Storage compartments occupy columns 77 and 78 in rows D, E and F.
 STORAGE_COLUMNS = [77, 78]
 STORAGE_ROWS    = ['D', 'E', 'F']
 
+# Display-layer status code for aisle cells (visual only, not stored in seat_map).
+STATUS_AISLE = 'X'
+
 # Seat status codes as named constants 
 STATUS_FREE     = 'F'   # Seat is available for booking.
 STATUS_RESERVED = 'R'   # Seat has been reserved by a customer.
-STATUS_AISLE    = 'X'   # Position is a cabin aisle; cannot be booked.
 STATUS_STORAGE  = 'S'   # Position is a storage area; cannot be booked.
+
+# Color palette used by the TTK seat map window (hex color codes).
+# Keeping these in one place makes future re-theming straightforward.
+
+COLOR_FREE_BG       = "#2ecc71"   # Green  – free seats
+COLOR_FREE_FG       = "#ffffff"
+COLOR_RESERVED_BG   = "#e74c3c"   # Red    – reserved seats
+COLOR_RESERVED_FG   = "#ffffff"
+COLOR_AISLE_BG      = "#f39c12"   # Amber  – aisle display row
+COLOR_AISLE_FG      = "#ffffff"
+COLOR_STORAGE_BG    = "#3498db"   # Blue   – storage areas
+COLOR_STORAGE_FG    = "#ffffff"
+COLOR_HEADER_FG     = "#ecf0f1"   # Light text for column/row headers
+COLOR_WINDOW_BG     = "#1a252f"   # Near-black window background
+COLOR_PANEL_BG      = "#2c3e50"   # Dark panel for legend and summary bars
+COLOR_PANEL_FG      = "#ecf0f1"   # Light text on dark panels
+ 
 
 # Seat Map initialization 
 
@@ -75,19 +102,41 @@ def initialize_seat_map():
            # Rule 1 – Storage areas take the highest priority.
            if row in STORAGE_ROWS and col in STORAGE_COLUMNS:
                seat_map[row][col] = STATUS_STORAGE
-
-           # Rule 2 – Remaining positions in the aisle row are marked X.
-           elif row == AISLE_ROW:
-               seat_map[row][col] = STATUS_AISLE
-
-           # Rule 3 – Everything else is a free, bookable seat.
+           # Rule 2 – Everything else is a free, bookable seat.
            else:
                seat_map[row][col] = STATUS_FREE
 
     return seat_map
 
 
-# Input Parsing
+# Input Parsing Helper
+
+def split_seat_references(raw_input):
+    """
+    Split a raw user input string into individual seat reference tokens,
+    accepting commas, spaces, or any mix of both as delimiters.
+ 
+    All of the following produce the same three tokens:
+        "5B,6B,7B"
+        "5B 6B 7B"
+        "5B, 6B, 7B"
+        "5B , 6B , 7B"
+ 
+    Parameters
+    ----------
+    raw_input : str
+        The raw string entered by the user.
+ 
+    Returns
+    -------
+    list of str
+        A list of non-empty token strings ready for individual validation.
+        Empty tokens (e.g., from trailing commas) are discarded.
+    """
+    # Replace every comma with a space, then split on any whitespace run.
+    # This handles commas, spaces, and mixed separators in a single step.
+    return raw_input.replace(',', ' ').split()
+ 
 
 def parse_seat_reference(seat_ref):
     """
@@ -116,15 +165,20 @@ def parse_seat_reference(seat_ref):
         print(f"  [Error] '{seat_ref}' is not a valid seat reference. "
               "Please use the format: column+row, e.g. 14C or 5B.")
         return None, None
+    
+    
     # The last character must be the row letter; everything before it is the column.
     row_char   = seat_ref[-1]
     column_str = seat_ref[:-1]
+    
     
     # Validate the row character.
     if row_char not in ROWS:
        print(f"  [Error] Row '{row_char}' does not exist. "
              f"Valid rows are: {', '.join(ROWS)}.")
        return None, None
+   
+    
    # Validate the column number.
     if not column_str.isdigit():
        print(f"  [Error] Column '{column_str}' is not a valid number.")
@@ -156,9 +210,9 @@ def check_availability(seat_map):
         up-to-date by subsequent booking operations.
     """
     print("\n--- Check Seat Availability ---")
-    raw_input = input("  Enter seat reference(s), e.g. 14C or 14C,15C: ").strip()
+    raw = input("  Enter seat reference(s), e.g. 14C or 14C,15C: ").strip()
     # Support comma-separated multiple seat references in one query.
-    seat_refs = [s.strip() for s in raw_input.split(',') if s.strip()]
+    seat_refs = [s.strip() for s in raw.split(',') if s.strip()]
 
     if not seat_refs:
        print("  [Error] No seat references were entered.")
@@ -166,11 +220,10 @@ def check_availability(seat_map):
 
    # Human-readable descriptions for each status code.
     status_labels = {
-       STATUS_FREE:     "Free – available for booking",
-       STATUS_RESERVED: "Reserved – already booked",
-       STATUS_AISLE:    "Aisle – cannot be booked",
-       STATUS_STORAGE:  "Storage area – cannot be booked"
-   }
+        STATUS_FREE:     "Free - available for booking",
+        STATUS_RESERVED: "Reserved - already booked",
+        STATUS_STORAGE:  "Storage area - cannot be booked",
+    }
     for ref in seat_refs:
         col, row = parse_seat_reference(ref)
  
@@ -205,13 +258,14 @@ def book_seat(seat_map):
         The live seat map, modified in-place upon successful bookings.
     """
     print("\n--- Book a Seat ---")
-    raw_input = input("  Enter seat reference(s) to book, e.g. 5B or 5B,6B: ").strip()
+    raw = input("  Enter seat reference(s) to book, e.g. 5B or 5B,6B: ").strip()
  
-    seat_refs = [s.strip() for s in raw_input.split(',') if s.strip()]
+    seat_refs = [s.strip() for s in raw.split(',') if s.strip()]
  
     if not seat_refs:
         print("  [Error] No seat references were entered.")
         return
+    
     # Accumulators for the confirmation summary (REQ-007).
     successfully_booked = []
     rejected_seats      = []   # List of (reference, reason) tuples.
@@ -221,7 +275,9 @@ def book_seat(seat_map):
  
         # Skip references that failed basic format/range validation.
         if col is None:
-            rejected_seats.append((ref.upper(), "Invalid seat reference format or out-of-range"))
+            rejected_seats.append(
+                (ref.upper(), "Invalid seat reference format or out-of-range")
+                )
             continue
         
         current_status = seat_map[row][col]
@@ -235,12 +291,6 @@ def book_seat(seat_map):
             # Seat is already taken; reject with a clear message (REQ-003).
             rejected_seats.append(
                 (f"{col}{row}", "Seat is already reserved by another customer")
-            )
- 
-        elif current_status == STATUS_AISLE:
-            # Aisle position; cannot be assigned to a passenger (REQ-004).
-            rejected_seats.append(
-                (f"{col}{row}", "Position is a cabin aisle and cannot be booked")
             )
  
         elif current_status == STATUS_STORAGE:
@@ -279,9 +329,12 @@ def free_seat(seat_map):
         The live seat map, modified in-place when a reservation is cancelled.
     """
     print("\n--- Free a Seat (Cancel Reservation) ---")
-    raw_input = input("  Enter seat reference(s) to free, e.g. 5B or 5B,6B: ").strip()
+    raw = input(
+        "  Enter seat reference(s) to free, e.g. 5B or 5B,6B: "
+        ).strip()
  
-    seat_refs = [s.strip() for s in raw_input.split(',') if s.strip()]
+    # Accept commas, spaces, or mixed delimiters between seat references.
+    seat_refs = split_seat_references(raw)
  
     if not seat_refs:
         print("  [Error] No seat references were entered.")
@@ -294,7 +347,9 @@ def free_seat(seat_map):
         col, row = parse_seat_reference(ref)
         
         if col is None:
-            rejected_seats.append((ref.upper(), "Invalid seat reference format or out-of-range"))
+            rejected_seats.append(
+                (ref.upper(), "Invalid seat reference format or out-of-range")
+                )
             continue
         
         current_status = seat_map[row][col]
@@ -309,10 +364,6 @@ def free_seat(seat_map):
             (f"{col}{row}", "Seat is already free; no reservation to cancel")
         )
 
-    elif current_status == STATUS_AISLE:
-        rejected_seats.append(
-            (f"{col}{row}", "Position is a cabin aisle; it cannot hold a reservation")
-        )
 
     elif current_status == STATUS_STORAGE:
         rejected_seats.append(
@@ -336,121 +387,241 @@ def free_seat(seat_map):
 
 # Show Booking Status  (REQ-001, REQ-006)
 
-def show_booking_status(seat_map):
+def show_booking_status_gui(seat_map):
     """
-    Display the current status of the entire Burak757 seat map in a
-    structured grid layout (REQ-001 / REQ-006).
+    Open a TTK graphical window showing the live Burak757 seat map (REQ-001).
  
-    The grid is printed with column numbers along the top header and
-    row letters along the left margin, matching the physical orientation
-    of the aircraft cabin as seen from the front.
+    Window sections
+    ---------------
+    Title area   : airline name, subtitle with live occupancy figures.
+    Seat grid    : Canvas widget, 80 columns x 7 visual rows (A, B, C,
+                   [aisle], D, E, F). The aisle row is amber, unlabeled,
+                   and purely cosmetic - it has no corresponding seat_map data.
+    Legend bar   : Color swatches and labels for F, R, X, S.
+    Summary bar  : Free / Reserved / Occupied% / Storage / Total counts.
+    Close button : Returns focus to the terminal menu.
  
-    Color-coded legends
-    --------------------
-    For readability in compatible terminals each status code is displayed
-    in its assigned colour:
-      [F] Green   – Free seat
-      [R] Red     – Reserved seat
-      [X] Yellow  – Aisle position
-      [S] Blue    – Storage area
+    The window blocks the terminal menu loop via mainloop() until closed,
+    preventing stale-data issues from concurrent bookings.
  
-    A summary panel beneath the grid reports the total count of seats in
-    each status category to give staff a quick overview of occupancy.
+    Color coding
+    ------------
+    Green  (#2ecc71) - Free      [F]
+    Red    (#e74c3c) - Reserved  [R]
+    Amber  (#f39c12) - Aisle     [X]  (display only)
+    Blue   (#3498db) - Storage   [S]
  
     Parameters
     ----------
     seat_map : dict
-        The current live seat map.
+        Current live seat map; read-only inside this function.
     """
-    print("\n--- Burak757 Seat Map ---")
+    # Cell sizing and spacing
+    CELL_W = 18
+    CELL_H = 20
+    CELL_PAD = 2
+    
+    # Left Margin for row labels; Top Margin for Column number labels
  
-    # ANSI escape sequences for terminal colour output.
-    # Reset color back to terminal default after each cell.
-    COLOR_RESET   = "\033[0m"
-    COLOR_GREEN   = "\033[92m"   # Free seats
-    COLOR_RED     = "\033[91m"   # Reserved seats
-    COLOR_YELLOW  = "\033[93m"   # Aisle positions
-    COLOR_BLUE    = "\033[94m"   # Storage areas
+    ROW_LABEL_W = 28
+    COL_LABEL_H = 36
  
-    status_colors = {
-        STATUS_FREE:     COLOR_GREEN,
-        STATUS_RESERVED: COLOR_RED,
-        STATUS_AISLE:    COLOR_YELLOW,
-        STATUS_STORAGE:  COLOR_BLUE,
+    # The display row sequence interleaves the visual aisle between C and D.
+    # Each entry is either a real row letter (key in seat_map) or the sentinel.
+    DISPLAY_ROWS = ['A', 'B', 'C', _AISLE_SENTINEL, 'D', 'E', 'F']
+ 
+    CANVAS_W = ROW_LABEL_W + NUM_COLUMNS * (CELL_W + CELL_PAD) + CELL_PAD
+    CANVAS_H = COL_LABEL_H + len(DISPLAY_ROWS) * (CELL_H + CELL_PAD) + CELL_PAD
+ 
+    # Map each status code to its background and foreground colors.
+    cell_bg = {
+        STATUS_FREE:     COLOR_FREE_BG,
+        STATUS_RESERVED: COLOR_RESERVED_BG,
+        STATUS_AISLE:    COLOR_AISLE_BG,
+        STATUS_STORAGE:  COLOR_STORAGE_BG,
+    }
+    cell_fg = {
+        STATUS_FREE:     COLOR_FREE_FG,
+        STATUS_RESERVED: COLOR_RESERVED_FG,
+        STATUS_AISLE:    COLOR_AISLE_FG,
+        STATUS_STORAGE:  COLOR_STORAGE_FG,
     }
  
-    # --- Header bar: column numbers ---
-    # Print column numbers in groups of 10 for readability;
-    # each cell occupies 3 characters to align with status tokens.
-    print("     ", end="")   # Offset for row-label margin.
-    for col in range(1, NUM_COLUMNS + 1):
-        if col % 10 == 1:    # Print only every 10th label to avoid clutter.
-            label = str(col)
-            print(f"{label:<10}", end="")
-    print()                  # Newline after header.
- 
-    # --- Secondary header: tick marks every 5 columns ---
-    print("     ", end="")
-    for col in range(1, NUM_COLUMNS + 1):
-        if col % 5 == 0:
-            print("|", end="  ")
-        else:
-            print(" ", end="  ")
-    print()
- 
-    # Row data
-    # Tallies for the summary panel below the map.
-    counts = {STATUS_FREE: 0, STATUS_RESERVED: 0,
-              STATUS_AISLE: 0, STATUS_STORAGE: 0}
- 
+    # Pre-compute occupancy counts for the summary bar.
+    counts = {STATUS_FREE: 0, STATUS_RESERVED: 0, STATUS_STORAGE: 0}
     for row in ROWS:
-        # Print the row letter as the left-hand margin label.
-        print(f"  {row}  ", end="")
- 
         for col in range(1, NUM_COLUMNS + 1):
-            status = seat_map[row][col]
-            color = status_colors.get(status, "")
-            # Each cell: colored status character + two spaces for spacing.
-            print(f"{color}{status}{COLOR_RESET}  ", end="")
-            counts[status] += 1
+            counts[seat_map[row][col]] += 1
  
-        print()   # Newline at the end of each row.
- 
-    # Status Legend 
-    print()
-    print("  Legend:  "
-          f"{COLOR_GREEN}[F] Free{COLOR_RESET}    "
-          f"{COLOR_RED}[R] Reserved{COLOR_RESET}    "
-          f"{COLOR_YELLOW}[X] Aisle{COLOR_RESET}    "
-          f"{COLOR_BLUE}[S] Storage{COLOR_RESET}")
- 
-    # Occupancy Summary
     total_bookable = counts[STATUS_FREE] + counts[STATUS_RESERVED]
-    reserved_pct   = (
-        (counts[STATUS_RESERVED] / total_bookable * 100)
-        if total_bookable > 0 else 0.0
-    )
-    print()
-    print("  ── Occupancy Summary ──────────────────────────────")
-    print(f"  Free seats      : {counts[STATUS_FREE]:>4}")
-    print(f"  Reserved seats  : {counts[STATUS_RESERVED]:>4}  ({reserved_pct:.1f}% of bookable seats)")
-    print(f"  Aisle positions : {counts[STATUS_AISLE]:>4}  (not bookable)")
-    print(f"  Storage areas   : {counts[STATUS_STORAGE]:>4}  (not bookable)")
-    print(f"  Total positions : {sum(counts.values()):>4}")
-    print("  ───────────────────────────────────────────────────")
+    reserved_pct   = (counts[STATUS_RESERVED] / total_bookable * 100
+                      if total_bookable > 0 else 0.0)
+    # Build the window.
+    root = tk.Tk()
+    root.title("Apache Airlines - Burak757 Booking Status")
+    root.configure(bg=COLOR_WINDOW_BG)
+    root.resizable(False, False)
+ 
+    style = ttk.Style(root)
+    style.theme_use('clam')
+ 
+    style.configure("Window.TFrame",  background=COLOR_WINDOW_BG)
+    style.configure("Panel.TFrame",   background=COLOR_PANEL_BG)
+ 
+    style.configure("Header.TLabel",
+        background=COLOR_WINDOW_BG, foreground=COLOR_HEADER_FG,
+        font=("Helvetica", 15, "bold"), padding=(0, 8, 0, 2))
+ 
+    style.configure("SubHeader.TLabel",
+        background=COLOR_WINDOW_BG, foreground="#95a5a6",
+        font=("Helvetica", 9), padding=(0, 0, 0, 6))
+ 
+    style.configure("Legend.TLabel",
+        background=COLOR_PANEL_BG, foreground=COLOR_PANEL_FG,
+        font=("Helvetica", 9), padding=(6, 5))
+ 
+    style.configure("Summary.TLabel",
+        background=COLOR_PANEL_BG, foreground=COLOR_PANEL_FG,
+        font=("Helvetica", 10), padding=(10, 6))
+ 
+    # Highlighted values in the summary bar use a yellow accent.
+    style.configure("SummaryHL.TLabel",
+        background=COLOR_PANEL_BG, foreground="#f1c40f",
+        font=("Helvetica", 10, "bold"), padding=(2, 6))
+ 
+    style.configure("Close.TButton",
+        font=("Helvetica", 10, "bold"), padding=(14, 6))
+ 
+    outer = ttk.Frame(root, style="Window.TFrame", padding=(16, 10, 16, 10))
+    outer.pack(fill=tk.BOTH, expand=True)
+ 
+    ttk.Label(outer, text="Burak757  -  Live Seat Map",
+              style="Header.TLabel").pack(anchor="w")
+ 
+    ttk.Label(outer,
+        text=(f"Rows A-F  |  Columns 1-{NUM_COLUMNS}  |  "
+              f"{counts[STATUS_RESERVED]} reserved  |  "
+              f"{counts[STATUS_FREE]} available  |  "
+              f"{reserved_pct:.1f}% occupied"),
+        style="SubHeader.TLabel").pack(anchor="w")
+ 
+    canvas = tk.Canvas(outer, width=CANVAS_W, height=CANVAS_H,
+                       bg=COLOR_WINDOW_BG, highlightthickness=0)
+    canvas.pack(pady=(0, 8))
+ 
+    
+ 
+    # Column number labels across the top, printed every 5 columns.
+    for col in range(1, NUM_COLUMNS + 1):
+        if col == 1 or col % 5 == 0:
+            x = ROW_LABEL_W + (col - 1) * (CELL_W + CELL_PAD) + CELL_W // 2
+            canvas.create_text(x, COL_LABEL_H // 2, text=str(col),
+                                fill=COLOR_HEADER_FG, font=("Helvetica", 7),
+                                anchor="center")
+ 
+    # Subtle rule between column labels and the seat grid.
+    canvas.create_line(0, COL_LABEL_H - 4, CANVAS_W, COL_LABEL_H - 4,
+                       fill="#3d5166", width=1)
+ 
+    # Render each display row, including the visual aisle sentinel.
+    for r_idx, row_key in enumerate(DISPLAY_ROWS):
+ 
+        y_center = COL_LABEL_H + r_idx * (CELL_H + CELL_PAD) + CELL_H // 2
+ 
+        if row_key == _AISLE_SENTINEL:
+            # Aisle row: draw amber X cells with no row label.
+            for col in range(1, NUM_COLUMNS + 1):
+                x0 = ROW_LABEL_W + (col - 1) * (CELL_W + CELL_PAD) + CELL_PAD
+                y0 = COL_LABEL_H + r_idx * (CELL_H + CELL_PAD) + CELL_PAD
+                x1 = x0 + CELL_W
+                y1 = y0 + CELL_H
+                canvas.create_rectangle(x0, y0, x1, y1,
+                                        fill=COLOR_AISLE_BG, outline="")
+                canvas.create_text((x0 + x1) / 2, (y0 + y1) / 2,
+                                   text=STATUS_AISLE, fill=COLOR_AISLE_FG,
+                                   font=("Helvetica", 7, "bold"), anchor="center")
+        else:
+            # Normal bookable row: draw the row letter label then each seat cell.
+            canvas.create_text(ROW_LABEL_W // 2, y_center, text=row_key,
+                                fill=COLOR_HEADER_FG,
+                                font=("Helvetica", 9, "bold"), anchor="center")
+ 
+            for col in range(1, NUM_COLUMNS + 1):
+                status = seat_map[row_key][col]
+                bg = cell_bg.get(status, "#7f8c8d")
+                fg = cell_fg.get(status, "#ffffff")
+ 
+                x0 = ROW_LABEL_W + (col - 1) * (CELL_W + CELL_PAD) + CELL_PAD
+                y0 = COL_LABEL_H + r_idx * (CELL_H + CELL_PAD) + CELL_PAD
+                x1 = x0 + CELL_W
+                y1 = y0 + CELL_H
+ 
+                canvas.create_rectangle(x0, y0, x1, y1, fill=bg, outline="")
+                canvas.create_text((x0 + x1) / 2, (y0 + y1) / 2,
+                                   text=status, fill=fg,
+                                   font=("Helvetica", 7, "bold"), anchor="center")
+ 
+    # Legend bar.
+    legend_frame = ttk.Frame(outer, style="Panel.TFrame", padding=(4, 6))
+    legend_frame.pack(fill=tk.X, pady=(0, 6))
+    ttk.Label(legend_frame, text="Legend:", style="Legend.TLabel").pack(side=tk.LEFT)
+ 
+    for bg_col, label_text in [
+        (COLOR_FREE_BG,     "F  Free"),
+        (COLOR_RESERVED_BG, "R  Reserved"),
+        (COLOR_AISLE_BG,    "X  Aisle"),
+        (COLOR_STORAGE_BG,  "S  Storage"),
+    ]:
+        swatch = tk.Canvas(legend_frame, width=14, height=14,
+                           bg=COLOR_PANEL_BG, highlightthickness=0)
+        swatch.create_rectangle(1, 1, 13, 13, fill=bg_col, outline="")
+        swatch.pack(side=tk.LEFT, padx=(10, 2), pady=4)
+        ttk.Label(legend_frame, text=label_text,
+                  style="Legend.TLabel").pack(side=tk.LEFT, padx=(0, 4))
+ 
+    # Summary bar.
+    summary_frame = ttk.Frame(outer, style="Panel.TFrame", padding=(4, 4))
+    summary_frame.pack(fill=tk.X, pady=(0, 10))
+ 
+    def add_summary_item(parent, description, value, col_index):
+        """
+        Place a description/value pair in the summary bar at col_index.
+ 
+        Parameters
+        ----------
+        parent      : ttk.Frame  The parent summary frame.
+        description : str        Label text, e.g. "Free:".
+        value       : str        The highlighted numeric or percentage value.
+        col_index   : int        Logical column; each pair occupies 2 grid cols.
+        """
+        ttk.Label(parent, text=description, style="Summary.TLabel").grid(
+            row=0, column=col_index * 2, sticky="e", padx=(10, 0))
+        ttk.Label(parent, text=value, style="SummaryHL.TLabel").grid(
+            row=0, column=col_index * 2 + 1, sticky="w")
+ 
+    add_summary_item(summary_frame, "Free:",     str(counts[STATUS_FREE]),     0)
+    add_summary_item(summary_frame, "Reserved:", str(counts[STATUS_RESERVED]), 1)
+    add_summary_item(summary_frame, "Occupied:", f"{reserved_pct:.1f}%",       2)
+    add_summary_item(summary_frame, "Storage:",  str(counts[STATUS_STORAGE]),  3)
+    add_summary_item(summary_frame, "Total:",    str(sum(counts.values())),    4)
+ 
+    ttk.Button(outer, text="Close", style="Close.TButton",
+               command=root.destroy).pack(anchor="e")
+ 
+    # Block the terminal menu until the window is closed to prevent stale data.
+    root.mainloop()
  
     
  # Main Menu Loop
  
 def display_menu():
     """
-    Print the main menu of the Apache Airlines Burak757 Booking System.
+    Print the main menu to the terminal.
  
-    The menu remains available after every operation and is only dismissed
-    when the user selects option 5 (Exit program).
+    The menu loops continuously until the user selects option 5 (Exit).
     """
     print("\n" + "=" * 52)
-    print("   Apache Airlines – Burak757 Booking System")
+    print("   Apache Airlines - Burak757 Booking System")
     print("=" * 52)
     print("  1.  Check availability of seat")
     print("  2.  Book a seat")
@@ -503,7 +674,7 @@ def main():
             free_seat(seat_map)
  
         elif choice == '4':
-            show_booking_status(seat_map)
+            show_booking_status_gui(seat_map)
  
         elif choice == '5':
             print("\n  Thank you for using the Apache Airlines Booking System.")
