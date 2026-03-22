@@ -65,4 +65,75 @@ def initialize_seat_map():
       A fully populated seat map where every position in the 6×80 grid
       carries one of the four status codes: F, R, X, or S.
   """
+    seat_map = {}
 
+    for row in ROWS:
+       seat_map[row] = {}  # Create a sub-dictionary for each row.
+
+       for col in range(1, NUM_COLUMNS + 1):
+
+           # Rule 1 – Storage areas take the highest priority.
+           if row in STORAGE_ROWS and col in STORAGE_COLUMNS:
+               seat_map[row][col] = STATUS_STORAGE
+
+           # Rule 2 – Remaining positions in the aisle row are marked X.
+           elif row == AISLE_ROW:
+               seat_map[row][col] = STATUS_AISLE
+
+           # Rule 3 – Everything else is a free, bookable seat.
+           else:
+               seat_map[row][col] = STATUS_FREE
+
+    return seat_map
+
+
+# Input Parsing
+
+def parse_seat_reference(seat_ref):
+    """
+    Parse and validate a seat reference string entered by the user.
+    
+    Accepted formats (case-insensitive):
+     "5B"  ->  column=5,  row='B'
+     "22A" ->  column=22, row='A'
+     "80F" ->  column=80, row='F'
+     The seat reference must consist of a numeric column identifier
+    followed by a single alphabetic row letter
+    Parameters
+    ----------
+    seat_ref : str
+        The raw input string provided by the user.
+    Returns
+    -------
+    tuple (int, str) or (None, None)
+        A (column, row) pair if the reference is valid; (None, None)
+        together with a printed error message if it is invalid.
+
+    """
+    seat_ref = seat_ref.strip().upper()
+    # A valid reference has at least two characters (digit(s) + letter).
+    if len(seat_ref) < 2:
+        print(f"  [Error] '{seat_ref}' is not a valid seat reference. "
+              "Please use the format: column+row, e.g. 14C or 5B.")
+        return None, None
+    # The last character must be the row letter; everything before it is the column.
+    row_char   = seat_ref[-1]
+    column_str = seat_ref[:-1]
+    
+    # Validate the row character.
+    if row_char not in ROWS:
+       print(f"  [Error] Row '{row_char}' does not exist. "
+             f"Valid rows are: {', '.join(ROWS)}.")
+       return None, None
+   # Validate the column number.
+    if not column_str.isdigit():
+       print(f"  [Error] Column '{column_str}' is not a valid number.")
+       return None, None
+    col = int(column_str)
+    
+    if col < 1 or col > NUM_COLUMNS:
+        print(f"  [Error] Column {col} is out of range. "
+              f"Valid columns are 1 to {NUM_COLUMNS}.")
+        return None, None
+ 
+    return col, row_char
